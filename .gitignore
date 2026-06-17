@@ -1,0 +1,15 @@
+data/
+data/raw/
+data/processed/
+data/segmented/
+results/figures/
+results/metrics/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# entornos virtuales (pesados, no versionar) y carpeta de trabajo
+.venv-tf/
+.venv/
+venv/
+_run/
