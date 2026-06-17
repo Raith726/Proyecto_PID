@@ -1,18 +1,12 @@
-# Dependencias del proyecto Hybrid Waste Classifier (notebooks + app Streamlit)
-# Runtime probado para la app: Python 3.11 (.venv-tf)
-opencv-python
-numpy
-scikit-learn
-scikit-image
-scipy
-matplotlib
-seaborn
-pandas
-joblib
-tqdm
-Pillow
-notebook
-ipykernel
-# --- app de inferencia (app.py) ---
+# requirements.txt — app Streamlit (Hybrid Waste Classifier)
+# Optimizado para Streamlit Community Cloud: build ligero, headless y CPU-only.
+# Recomendado en la config del deploy: Python 3.12 (hay wheels para todo esto).
+
 streamlit
-tensorflow
+numpy>=2.0                # los .pkl de los modelos se serializaron con numpy 2.x
+opencv-python-headless     # SIN GUI: Streamlit Cloud no tiene libGL (opencv-python falla al importar)
+scikit-image
+scikit-learn==1.9.0        # versión con la que se entrenó/serializó el SVM y el scaler (para des-picklear)
+scipy
+joblib
+tensorflow-cpu             # CPU-only: evita librerías CUDA y reduce uso de memoria
