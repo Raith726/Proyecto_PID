@@ -43,13 +43,40 @@ TACHOS = {
 }
 
 
+# clases finales del proyecto (orden alfabetico = orden de class_indices de Keras)
+CLASES = ['battery', 'cardboard', 'glass', 'metal', 'organic',
+          'paper', 'plastic', 'textile', 'trash']
+
+
+def _modelo(*nombres):
+    """Devuelve la primera ruta existente entre varios nombres posibles."""
+    for n in nombres:
+        p = MODEL_DIR / n
+        if p.exists():
+            return p
+    raise FileNotFoundError(
+        f"No se encontro ninguno de {nombres} en {MODEL_DIR}")
+
+
 @st.cache_resource
 def cargar():
-    svm = joblib.load(MODEL_DIR / 'svm_clasico.pkl')
-    scaler = joblib.load(MODEL_DIR / 'scaler_clasico.pkl')
-    features = joblib.load(MODEL_DIR / 'features_clasico.pkl')
+    svm = joblib.load(_modelo('svm_clasico.pkl', 'svm.pkl'))
+    scaler = joblib.load(_modelo('scaler_clasico.pkl', 'scaler.pkl'))
+    features = joblib.load(_modelo('features_clasico.pkl', 'features.pkl'))
     from tensorflow.keras.models import load_model
-    cnn = load_model(MODEL_DIR / 'cnn_verificador.h5')
+    from tensorflow.keras.layers import DepthwiseConv2D
+
+    # Compat: la CNN (MobileNetV2) se guardo con Keras 2.x, que serializa el
+    # argumento 'groups' en DepthwiseConv2D. Keras 3.x ya no lo acepta, asi que
+    # lo descartamos al deserializar para poder cargar el .h5 sin reentrenar.
+    class _DepthwiseConv2D(DepthwiseConv2D):
+        def __init__(self, *args, **kwargs):
+            kwargs.pop('groups', None)
+            super().__init__(*args, **kwargs)
+
+    cnn = load_model(_modelo('cnn_verificador.h5', 'cnn.h5'),
+                     custom_objects={'DepthwiseConv2D': _DepthwiseConv2D},
+                     compile=False)
     return svm, scaler, features, cnn
 
 
@@ -225,7 +252,11 @@ st.caption('SVM clasico (LBP, GLCM, Gabor, HSV/LAB, forma) con verificador CNN M
 try:
     svm, scaler, features, cnn = cargar()
     clases_svm = list(svm.classes_)
-    clases_cnn = sorted(TACHOS.keys())
+    clases_cnn = CLASES
+    n_out_cnn = int(cnn.output_shape[-1])
+    if n_out_cnn != len(clases_cnn):
+        st.warning(f'La CNN tiene {n_out_cnn} salidas pero hay {len(clases_cnn)} clases definidas; '
+                   'revisa el orden de CLASES.')
 except Exception as e:
     st.error(f'No se cargaron los modelos en results/models. Detalle: {e}')
     st.stop()

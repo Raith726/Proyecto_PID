@@ -1,12 +1,18 @@
+# Dependencias del proyecto Hybrid Waste Classifier (notebooks + app Streamlit)
+# Runtime probado para la app: Python 3.11 (.venv-tf)
 opencv-python
 numpy
 scikit-learn
 scikit-image
+scipy
 matplotlib
 seaborn
 pandas
 joblib
-notebook
-ipykernel
 tqdm
 Pillow
+notebook
+ipykernel
+# --- app de inferencia (app.py) ---
+streamlit
+tensorflow
