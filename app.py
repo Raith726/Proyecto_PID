@@ -15,7 +15,7 @@ ROOT = Path(__file__).parent
 sys.path.append(str(ROOT))
 from src.segmentation.edge_detection import bordes_sv, densidad_bordes
 from src.segmentation.morphological_ops import rellenar_contornos
-from src.classification.classic_rules import clasificar_reglas, CLASES as CLASES_RULES
+from src.classification.min_distance import clasificar_min_distancia, CLASES as CLASES_MD
 
 MODEL_DIR = ROOT / 'results' / 'models'
 FEATURES_TEST = ROOT / 'results' / 'features' / 'features_test.csv'
@@ -248,27 +248,27 @@ def proba_cnn(cnn, img_bgr):
     return cnn.predict(np.expand_dims(img, 0), verbose=0)[0]
 
 
-def clasificar_por_reglas(img_bgr, relleno):
-    """Clasificador clasico sin ML: umbrales sobre color/forma/textura."""
+def clasificar_por_distancia(img_bgr, relleno):
+    """Clasificador clasico sin ML: minima distancia euclidiana a un prototipo por clase."""
     fila = construir_fila(img_bgr, relleno)
-    return clasificar_reglas(fila)  # (clase, proba_dict, motivos)
+    return clasificar_min_distancia(fila)  # (clase, proba_dict, distancias)
 
 
 @st.cache_data(show_spinner=False)
 def comparacion_metodos():
     """Accuracy de los 3 metodos sobre el mismo test set (2328 imagenes).
 
-    - Clasico: se evaluan las reglas sobre el CSV de features del test.
+    - Clasico: minima distancia al prototipo, evaluado sobre el CSV de features.
     - SVM / Hibrido: se leen las predicciones precomputadas (notebooks 05-07).
     """
     df = pd.read_csv(FEATURES_TEST)
     y = df['clase'].to_numpy()
-    pred_cl = np.array([clasificar_reglas(r)[0] for _, r in df.iterrows()])
+    pred_cl = np.array([clasificar_min_distancia(r)[0] for _, r in df.iterrows()])
     acc_cl = float((pred_cl == y).mean())
     yt = np.asarray(joblib.load(_modelo('y_test.pkl')))
     acc_svm = float((yt == np.asarray(joblib.load(_modelo('pred_svm.pkl')))).mean())
     acc_hib = float((yt == np.asarray(joblib.load(_modelo('pred_hibrido.pkl')))).mean())
-    accs = {'Clasico (reglas PI)': acc_cl, 'SVM solo': acc_svm, 'Hibrido SVM + CNN': acc_hib}
+    accs = {'Clasico (min-distancia)': acc_cl, 'SVM solo': acc_svm, 'Hibrido SVM + CNN': acc_hib}
     return accs, int(len(y))
 
 
@@ -336,20 +336,21 @@ st.divider()
 st.header('Comparacion de los 3 metodos (test set)')
 try:
     accs, n_test = comparacion_metodos()
-    orden = ['Clasico (reglas PI)', 'SVM solo', 'Hibrido SVM + CNN']
+    orden = ['Clasico (min-distancia)', 'SVM solo', 'Hibrido SVM + CNN']
     cc = st.columns(3)
-    baja = ['Sin ML: solo umbrales de PI', 'Descriptores + SVM-RBF', 'SVM y CNN solo si duda']
+    baja = ['Sin ML: min-distancia a prototipo', 'Descriptores + SVM-RBF', 'SVM y CNN solo si duda']
     for col, nombre, sub in zip(cc, orden, baja):
         col.metric(nombre, f'{accs[nombre]:.1%}')
         col.caption(sub)
     st.bar_chart({nombre: accs[nombre] for nombre in orden}, height=220)
     st.caption(
         f'Accuracy sobre el mismo test set de {n_test} imagenes (9 clases, desbalanceado, '
-        f'textile ~47%). El clasificador clasico por reglas ({accs["Clasico (reglas PI)"]:.1%}) '
-        f'supera al azar (11.1%) pero queda muy por debajo del SVM y del hibrido: los umbrales '
-        f'fijos no capturan la superposicion de color/textura entre clases (p. ej. el vidrio '
-        f'transparente toma el color de su fondo). Esa brecha justifica el salto a metodos que '
-        f'aprenden la frontera de decision.')
+        f'textile ~47%). El clasificador clasico por minima distancia '
+        f'({accs["Clasico (min-distancia)"]:.1%}) supera al azar (11.1%) pero queda por debajo '
+        f'del SVM y del hibrido: comparar contra un unico centroide por clase no captura la '
+        f'superposicion de color/textura entre clases (p. ej. el vidrio transparente toma el '
+        f'color de su fondo). Esa brecha justifica el salto a metodos que aprenden la frontera '
+        f'de decision.')
 except Exception as e:
     st.info(f'No se pudo calcular la comparacion de metodos: {e}')
 st.divider()
@@ -357,13 +358,14 @@ st.divider()
 with st.sidebar:
     st.header('Configuracion')
     modo = st.radio('Modo de clasificacion',
-                    ['Clasico (reglas PI)', 'SVM solo', 'Hibrido SVM + CNN', 'CNN sola'])
+                    ['Clasico (min-distancia)', 'SVM solo', 'Hibrido SVM + CNN', 'CNN sola'])
     theta = st.slider('Umbral de confianza (theta)', 0.30, 0.95, 0.60, 0.05,
                       disabled=(modo != 'Hibrido SVM + CNN'))
     ver_pre = st.checkbox('Mostrar preprocesamiento', value=True)
     st.caption('En modo hibrido, si la confianza del SVM < theta la imagen pasa al verificador CNN.')
-    st.caption('El modo Clasico no usa ML: decide por umbrales de color HSV/LAB, '
-               'forma (circularidad, aspect ratio) y textura (contraste GLCM).')
+    st.caption('El modo Clasico no usa ML: asigna la imagen a la clase cuyo prototipo '
+               '(vector promedio de las 113 features del train) esta a menor distancia '
+               'euclidiana estandarizada.')
 
 archivos = st.file_uploader('Sube una o varias imagenes', type=['jpg', 'jpeg', 'png'],
                             accept_multiple_files=True)
@@ -376,7 +378,7 @@ for archivo in archivos or []:
     img_bgr = cv2.imdecode(data, cv2.IMREAD_COLOR)
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
-    motivos = None
+    dists = None
     with st.spinner('Procesando...'):
         relleno, pasos = segmentar(img_bgr)
 
@@ -385,11 +387,11 @@ for archivo in archivos or []:
         ps = proba_svm(svm, scaler, features, img_bgr, relleno) if usa_svm else None
         pc = proba_cnn(cnn, img_bgr) if usa_cnn else None
 
-        if modo == 'Clasico (reglas PI)':
-            clase, proba_cl, motivos = clasificar_por_reglas(img_bgr, relleno)
-            clases = CLASES_RULES
+        if modo == 'Clasico (min-distancia)':
+            clase, proba_cl, dists = clasificar_por_distancia(img_bgr, relleno)
+            clases = CLASES_MD
             proba = np.array([proba_cl[c] for c in clases])
-            conf, fuente = float(proba_cl[clase]), 'Reglas PI'
+            conf, fuente = float(proba_cl[clase]), 'Min-distancia'
         elif modo == 'SVM solo':
             clases, proba = clases_svm, ps
             clase = clases[int(np.argmax(proba))]
@@ -419,19 +421,19 @@ for archivo in archivos or []:
             unsafe_allow_html=True)
         st.info(tip)
         a, b, d = st.columns(3)
-        es_reglas = modo == 'Clasico (reglas PI)'
-        a.metric('Puntaje reglas' if es_reglas else 'Confianza', f'{conf:.1%}')
+        es_dist = modo == 'Clasico (min-distancia)'
+        a.metric('Cercania (norm.)' if es_dist else 'Confianza', f'{conf:.1%}')
         b.metric('Resuelto por', fuente)
         d.metric('Modo', modo.split()[0])
-        st.markdown('**Puntaje por reglas (normalizado)**' if es_reglas
+        st.markdown('**Cercania al prototipo (normalizada)**' if es_dist
                     else '**Distribucion de probabilidad**')
         st.bar_chart({c: float(p) for c, p in zip(clases, proba)})
-        if motivos is not None:
-            st.markdown('**Reglas de PI que decidieron la clase**')
-            if motivos:
-                st.markdown('\n'.join(f'- {m}' for m in motivos))
-            else:
-                st.caption('Ninguna regla especifica se activo: se asigno por prioridad (descarte).')
+        if dists is not None:
+            st.markdown('**Distancia euclidiana al prototipo de cada clase** (menor = mas cercano)')
+            orden_d = sorted(dists.items(), key=lambda kv: kv[1])
+            st.markdown('\n'.join(
+                f"- {'**' if c == clase else ''}{c}: {v:.2f}{'  ← elegido**' if c == clase else ''}"
+                for c, v in orden_d))
 
     if ver_pre:
         with st.expander('Proceso de preprocesamiento y segmentacion', expanded=False):
